@@ -120,7 +120,7 @@ class AddRoute(CommandType):
 
 def _serialize_message(msg: CommandType) -> str:
     # Mainly a stub, could probably be removed, but I wanted a separate location
-    # for string assembled message assembly incase it ever changes.
+    # for string message assembly incase it ever changes.
     tokens = list(msg.__dict__.values())
     return _DELIMITER.join(tokens)
 

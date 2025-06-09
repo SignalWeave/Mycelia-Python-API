@@ -1,0 +1,36 @@
+<component name="InspectionProjectProfileManager">
+  <profile version="1.0">
+    <option name="myName" value="Project Default" />
+    <inspection_tool class="PyPep8Inspection" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <option name="ignoredErrors">
+        <list>
+          <option value="E501" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyPep8NamingInspection" enabled="true" level="WEAK WARNING" enabled_by_default="true">
+      <option name="ignoredErrors">
+        <list>
+          <option value="N813" />
+          <option value="N806" />
+        </list>
+      </option>
+    </inspection_tool>
+    <inspection_tool class="PyUnresolvedReferencesInspection" enabled="true" level="WARNING" enabled_by_default="true">
+      <option name="ignoredIdentifiers">
+        <list>
+          <option value="PySide2.QtWidgets.clicked.connect" />
+          <option value="maya.cmds.file" />
+          <option value="maya.cmds.playblast" />
+          <option value="PySide2.QtWidgets.itemClicked.connect" />
+          <option value="PySide2.QtWidgets.textChanged.connect" />
+          <option value="maya.cmds.pluginInfo" />
+          <option value="maya.cmds.bakeSimulation" />
+          <option value="maya.cmds.select" />
+          <option value="maya.cmds.ls" />
+          <option value="maya.OpenMayaUI" />
+        </list>
+      </option>
+    </inspection_tool>
+  </profile>
+</component>
