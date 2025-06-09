@@ -127,8 +127,8 @@ def _serialize_message(msg: CommandType) -> str:
 
 def process_command(message: CommandType, address: str, port: int) -> None:
     """Sends the CommandType message. The message type should be
-    `mycelium.SendMessage`, `mycelium.AddSubscriber`, `mycelium.AddChannel`,
-    or `mycelium.AddRoute`.
+    `mycelia.SendMessage`, `mycelia.AddSubscriber`, `mycelia.AddChannel`,
+    or `mycelia.AddRoute`.
     """
     payload = _serialize_message(message)
 
