@@ -1,5 +1,5 @@
-# Mycelium-Python-Client
-Mycelium Python Client
+# Mycelia-Python-Client
+Mycelia Python Client
 
 ## Usage
 
