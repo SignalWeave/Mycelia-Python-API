@@ -2,7 +2,7 @@
 requires = ["setuptools", "setuptools-scm"]
 
 [tool.setuptools]
-packages = ["mycelium"]
+packages = ["mycelia"]
 
 [project]
 name = "cypher"
@@ -10,10 +10,10 @@ authors = [
     {name = "Nathan Maxwell"},
     {name = "Jacob Vantol"}
 ]
-description = "Python client package for sending and recieving messages with the Mycelium message router."
+description = "Python API package for sending and recieving messages with the Mycelia message router."
 readme = "README.md"
 requires-python = ">=3.4"
-keywords = ["python", "messaging", "distributed", "mycelium"]
+keywords = ["python", "messaging", "distributed", "mycelia"]
 license = { file = "LICENSE" }
 classifiers = [
     "Programming Language :: Python :: 3.9",
@@ -22,5 +22,5 @@ dependencies = ['importlib-metadata; python_version<"3.9"']
 version = "0.0.1"
 
 [project.urls]
-Homepage = "https://github.com/SignalWeave/Mycelium-Python-Client"
-Source = "https://github.com/SignalWeave/Mycelium-Python-Client"
+Homepage = "https://github.com/SignalWeave/Mycelia-Python-API"
+Source = "https://github.com/SignalWeave/Mycelia-Python-API"
