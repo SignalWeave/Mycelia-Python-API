@@ -152,7 +152,9 @@ def start_listener(local_addr: str = '127.0.0.1',
     Args:
         local_addr (str): The address to bind the socket to, defaults to
          '127.0.0.1'.
+
         local_port (int): Which port to listen on. Defaults to 5500.
+
         message_processor (Callable[[bytes], None]: Which function/object
          to send the byte payload to.
     """
