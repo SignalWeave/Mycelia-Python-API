@@ -1,22 +1,21 @@
 import socket
 import uuid
+from typing import Callable
 from typing import Union
-
 
 __all__ = [
     'SendMessage',
     'AddSubscriber',
     'AddChannel',
     'AddRoute',
-    'process_command'
+    'process_command',
+    'start_listener'
 ]
-
 
 _TYPE_SEND_MESSAGE = 'send_message'
 _TYPE_ADD_SUBSCRIBER = 'add_subscriber'
 _TYPE_ADD_CHANNEL = 'add_channel'
 _TYPE_ADD_ROUTE = 'add_route'
-
 
 _TYPE_COMMAND = Union[
     _TYPE_SEND_MESSAGE,
@@ -49,6 +48,7 @@ class SendMessage(CommandType):
 
         payload (str): The data to forward to all subscribers.
     """
+
     def __init__(self, route: str, payload: str) -> None:
         self.cmd_type: _TYPE_COMMAND = _TYPE_SEND_MESSAGE
         self.id: str = str(uuid.uuid4())
@@ -73,6 +73,7 @@ class AddSubscriber(CommandType):
         address (str): The address all messages should be forwarded
          to from the Mycelia server.
     """
+
     def __init__(self, route: str, channel: str, address: str) -> None:
         self.cmd_type: _TYPE_COMMAND = _TYPE_ADD_SUBSCRIBER
         self.id: str = str(uuid.uuid4())
@@ -93,6 +94,7 @@ class AddChannel(CommandType):
 
         name (str): What to name the channel.
     """
+
     def __init__(self, route: str, name: str) -> None:
         self.cmd_type: _TYPE_COMMAND = _TYPE_ADD_CHANNEL
         self.id: str = str(uuid.uuid4())
@@ -110,6 +112,7 @@ class AddRoute(CommandType):
         name (str): The name of the route. Messages containing this name
          in their route field will be sent down channels in this route.
     """
+
     def __init__(self, name: str) -> None:
         self.cmd_type: _TYPE_COMMAND = _TYPE_ADD_ROUTE
         self.id: str = str(uuid.uuid4())
@@ -135,3 +138,38 @@ def process_command(message: CommandType, address: str, port: int) -> None:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.connect((address, port))
         sock.sendall(payload.encode('utf-8'))
+
+
+# --------Server Boilerplate-----------------------------------------------------
+
+def start_listener(local_addr: str = '127.0.0.1',
+                   local_port: int = 5500,
+                   message_processor: Callable[[bytes], None] = None
+                   ) -> None:
+    """Starts a while loop that listens to a socket bound to the addr and port.
+    Any bytes received will be passed along to the message_processor.
+
+    Args:
+        local_addr (str): The address to bind the socket to, defaults to
+         '127.0.0.1'.
+        local_port (int): Which port to listen on. Defaults to 5500.
+        message_processor (Callable[[bytes], None]: Which function/object
+         to send the byte payload to.
+    """
+    if message_processor is None:
+        raise ValueError
+
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
+        server_sock.bind((local_addr, local_port))
+        server_sock.listen()
+
+        while True:
+            conn, addr = server_sock.accept()
+            with conn:
+                print(f'Connected by {addr}')
+                while True:
+                    payload = conn.recv(1024)
+                    if not payload:
+                        break
+
+                    message_processor(payload)
