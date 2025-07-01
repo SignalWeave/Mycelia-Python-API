@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import socket
+import threading
 import uuid
 from typing import Callable
 from typing import Union
@@ -9,7 +12,8 @@ __all__ = [
     'AddChannel',
     'AddRoute',
     'process_command',
-    'start_listener'
+    'get_local_ipv4',
+    'MyceliaListener'
 ]
 
 _TYPE_SEND_MESSAGE = 'send_message'
@@ -140,38 +144,102 @@ def process_command(message: CommandType, address: str, port: int) -> None:
         sock.sendall(payload.encode('utf-8'))
 
 
-# --------Server Boilerplate-----------------------------------------------------
+# --------Network Boilerplate--------------------------------------------------
 
-def start_listener(local_addr: str = '127.0.0.1',
-                   local_port: int = 5500,
-                   message_processor: Callable[[bytes], None] = None
-                   ) -> None:
-    """Starts a while loop that listens to a socket bound to the addr and port.
-    Any bytes received will be passed along to the message_processor.
-
-    Args:
-        local_addr (str): The address to bind the socket to, defaults to
-         '127.0.0.1'.
-
-        local_port (int): Which port to listen on. Defaults to 5500.
-
-        message_processor (Callable[[bytes], None]: Which function/object
-         to send the byte payload to.
+def get_local_ipv4() -> str:
+    """Get the local machine's primary IPv4 address.
+    If it cannot be determined, defaults to 127.0.0.1.
     """
-    if message_processor is None:
-        raise ValueError
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        try:
+            sock.connect(('10.255.255.255', 1))
+            return sock.getsockname()[0]
+        except Exception as e:
+            print(f'Exception getting IPv4, defaulting to 127.0.0.1 - {e}')
+            return '127.0.0.1'
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
-        server_sock.bind((local_addr, local_port))
-        server_sock.listen()
 
-        while True:
-            conn, addr = server_sock.accept()
+_LOCAL_IPv4 = get_local_ipv4()
+
+
+class MyceliaListener(object):
+    """A listener object that binds to a socket and listens for messages.
+
+    Has various utility for passing the message to a hosted processor.
+
+    Example usage:
+        >>> listener = MyceliaListener(message_processor=print)
+        >>>
+        >>> # In a GUI or signal handler or thread:
+        >>> def external_shutdown():
+        >>>     listener.stop()
+        >>>
+        >>> listener.start()
+    """
+
+    def __init__(self,
+                 message_processor: Callable[[bytes], None],
+                 local_addr: str = _LOCAL_IPv4,
+                 local_port: int = 5500) -> None:
+        """
+        Args:
+            message_processor (Callable[[bytes], None]: Which function/object
+             to send the byte payload to.
+
+            local_addr (str): The address to bind the socket to, defaults to
+             '127.0.0.1'.
+
+            local_port (int): Which port to listen on. Defaults to 5500.
+         """
+        self._local_addr = local_addr
+        self._local_port = local_port
+        self._message_processor = message_processor
+
+        self._stop_event = threading.Event()
+        self._server_sock: socket.socket | None = None
+
+    def _listen(self, sock: socket.socket) -> None:
+        """While loop logic for listening to the socket and passing incoming
+        data to the processor.
+        """
+        while not self._stop_event.is_set():
+            try:
+                conn, addr = sock.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break  # Socket was closed
+
             with conn:
                 print(f'Connected by {addr}')
-                while True:
-                    payload = conn.recv(1024)
+                while not self._stop_event.is_set():
+                    try:
+                        payload = conn.recv(1024)
+                    except OSError:
+                        break
+
                     if not payload:
                         break
 
-                    message_processor(payload)
+                    self._message_processor(payload)
+
+    def start(self) -> None:
+        """Blocking call that starts the socket listener loop."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
+            self._server_sock = server_sock
+            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_sock.settimeout(1.0)
+            server_sock.bind((self._local_addr, self._local_port))
+            server_sock.listen()
+
+            print(f'Listening on {self._local_addr}:{self._local_port}')
+            self._listen(server_sock)
+
+    def stop(self) -> None:
+        """Stops and shuts down the listener."""
+        self._stop_event.set()
+        if self._server_sock:
+            try:
+                self._server_sock.close()
+            except OSError:
+                pass
