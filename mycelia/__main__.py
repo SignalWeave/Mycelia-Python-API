@@ -20,15 +20,18 @@ _TYPE_SEND_MESSAGE = 'send_message'
 _TYPE_ADD_SUBSCRIBER = 'add_subscriber'
 _TYPE_ADD_CHANNEL = 'add_channel'
 _TYPE_ADD_ROUTE = 'add_route'
+_TYPE_ADD_TRANSFORMER = 'add_transformer'
 
 _TYPE_COMMAND = Union[
     _TYPE_SEND_MESSAGE,
     _TYPE_ADD_SUBSCRIBER,
     _TYPE_ADD_CHANNEL,
-    _TYPE_ADD_ROUTE
+    _TYPE_ADD_ROUTE,
+    _TYPE_ADD_TRANSFORMER  # TODO: finish
 ]
 
 _DELIMITER = ';;'
+API_PROTOCOL_VER = 1
 
 
 # --------Command Types--------------------------------------------------------
@@ -49,11 +52,15 @@ class SendMessage(CommandType):
 
     Args:
         route (str): The route to send the message through.
-
         payload (str): The data to forward to all subscribers.
+        proto_ver (int): The protocol version, defaults to API_PROTOCOL_VER.
     """
 
-    def __init__(self, route: str, payload: str) -> None:
+    def __init__(self,
+                 route: str,
+                 payload: str,
+                 proto_ver: int = API_PROTOCOL_VER) -> None:
+        self.proto_ver: str = str(proto_ver)
         self.cmd_type: _TYPE_COMMAND = _TYPE_SEND_MESSAGE
         self.id: str = str(uuid.uuid4())
         self.route: str = route
@@ -70,15 +77,19 @@ class AddSubscriber(CommandType):
     Args:
         route (str): The route key that the subscriber will receive
          message from.
-
         channel (str): The channel name to subscribe to that exists
          on the given route.
-
         address (str): The address all messages should be forwarded
          to from the Mycelia server.
+        proto_ver (int): The protocol version, defaults to API_PROTOCOL_VER.
     """
 
-    def __init__(self, route: str, channel: str, address: str) -> None:
+    def __init__(self,
+                 route: str,
+                 channel: str,
+                 address: str,
+                 proto_ver: int = API_PROTOCOL_VER) -> None:
+        self.proto_ver: str = str(proto_ver)
         self.cmd_type: _TYPE_COMMAND = _TYPE_ADD_SUBSCRIBER
         self.id: str = str(uuid.uuid4())
         self.route = route
@@ -95,11 +106,15 @@ class AddChannel(CommandType):
 
     Args:
         route (str): The route to add the channel to.
-
         name (str): What to name the channel.
+        proto_ver (int): The protocol version, defaults to API_PROTOCOL_VER.
     """
 
-    def __init__(self, route: str, name: str) -> None:
+    def __init__(self,
+                 route: str,
+                 name: str,
+                 proto_ver: int = API_PROTOCOL_VER) -> None:
+        self.proto_ver: str = str(proto_ver)
         self.cmd_type: _TYPE_COMMAND = _TYPE_ADD_CHANNEL
         self.id: str = str(uuid.uuid4())
         self.route = route
@@ -115,19 +130,52 @@ class AddRoute(CommandType):
     Args:
         name (str): The name of the route. Messages containing this name
          in their route field will be sent down channels in this route.
+        proto_ver (int): The protocol version, defaults to API_PROTOCOL_VER.
     """
 
-    def __init__(self, name: str) -> None:
+    def __init__(self,
+                 name: str,
+                 proto_ver: int = API_PROTOCOL_VER) -> None:
+        self.proto_ver: str = str(proto_ver)
         self.cmd_type: _TYPE_COMMAND = _TYPE_ADD_ROUTE
         self.id: str = str(uuid.uuid4())
         self.name = name
 
 
+class AddTransformer(CommandType):
+    """A CommandType that will register a transformer on a route.
+
+    Mycelia uses ;; as a delimiter token to split fields apart.
+    Avoid using ;; in your route name.
+
+    Args:
+        route (str): The route key that the subscriber will receive
+         message from.
+        channel (str): The channel name to subscribe to that exists
+         on the given route.
+        address (str): The address all messages should be forwarded
+         to from the Mycelia server.
+        proto_ver (int): The protocol version, defaults to API_PROTOCOL_VER.
+    """
+
+    def __init__(self,
+                 route: str,
+                 channel: str,
+                 address: str,
+                 proto_ver: int = API_PROTOCOL_VER) -> None:
+        self.proto_ver: str = str(proto_ver)
+        self.cmd_type: _TYPE_COMMAND = _TYPE_ADD_TRANSFORMER
+        self.id: str = str(uuid.uuid4())
+        self.route = route
+        self.channel = channel
+        self.address = address
+
+
 # --------Message Handling-----------------------------------------------------
 
 def _serialize_message(msg: CommandType) -> str:
-    # Mainly a stub, could probably be removed, but I wanted a separate location
-    # for string message assembly incase it ever changes.
+    # Mainly a stub, could probably be removed, but I wanted a separate
+    # location for string message assembly incase it ever changes.
     tokens = list(msg.__dict__.values())
     return _DELIMITER.join(tokens)
 
@@ -227,7 +275,9 @@ class MyceliaListener(object):
         """Blocking call that starts the socket listener loop."""
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as server_sock:
             self._server_sock = server_sock
-            server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            server_sock.setsockopt(
+                socket.SOL_SOCKET, socket.SO_REUSEADDR, 1
+            )
             server_sock.settimeout(1.0)
             server_sock.bind((self._local_addr, self._local_port))
             server_sock.listen()
