@@ -48,9 +48,6 @@ class SendMessage(CommandType):
     """A CommandType that will send a string message through the
     specified route.
 
-    Mycelia uses ;; as a delimiter token to split fields apart.
-    Avoid using ;; in your route name or payload string.
-
     Args:
         route (str): The route to send the message through.
         payload (str): The data to forward to all subscribers.
@@ -71,9 +68,6 @@ class SendMessage(CommandType):
 class AddSubscriber(CommandType):
     """A CommandType that will add a subscriber to a specified
     route + channel.
-
-    Mycelia uses ;; as a delimiter token to split fields apart.
-    Avoid using ;; in your route name, channel name, or address.
 
     Args:
         route (str): The route key that the subscriber will receive
@@ -102,9 +96,6 @@ class AddChannel(CommandType):
     """A CommandType that will add a channel to a specified
     route.
 
-    Mycelia uses ;; as a delimiter token to split fields apart.
-    Avoid using ;; in your route name or channel name.
-
     Args:
         route (str): The route to add the channel to.
         name (str): What to name the channel.
@@ -125,9 +116,6 @@ class AddChannel(CommandType):
 class AddRoute(CommandType):
     """A CommandType that will register a route on a Mycelia instance.
 
-    Mycelia uses ;; as a delimiter token to split fields apart.
-    Avoid using ;; in your route name.
-
     Args:
         name (str): The name of the route. Messages containing this name
          in their route field will be sent down channels in this route.
@@ -145,9 +133,6 @@ class AddRoute(CommandType):
 
 class AddTransformer(CommandType):
     """A CommandType that will register a transformer on a route.
-
-    Mycelia uses ;; as a delimiter token to split fields apart.
-    Avoid using ;; in your route name.
 
     Args:
         route (str): The route key that the subscriber will receive
