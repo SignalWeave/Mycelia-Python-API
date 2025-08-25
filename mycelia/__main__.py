@@ -11,26 +11,27 @@ __all__ = [
     'AddSubscriber',
     'AddChannel',
     'AddRoute',
+    'AddTransformer',
     'process_command',
     'get_local_ipv4',
     'MyceliaListener'
 ]
 
-_TYPE_SEND_MESSAGE = 'send_message'
-_TYPE_ADD_SUBSCRIBER = 'add_subscriber'
-_TYPE_ADD_CHANNEL = 'add_channel'
-_TYPE_ADD_ROUTE = 'add_route'
-_TYPE_ADD_TRANSFORMER = 'add_transformer'
+_CMD_SEND_MESSAGE = 'send_message'
+_CMD_ADD_SUBSCRIBER = 'add_subscriber'
+_CMD_ADD_CHANNEL = 'add_channel'
+_CMD_ADD_ROUTE = 'add_route'
+_CMD_ADD_TRANSFORMER = 'add_transformer'
 
 _TYPE_COMMAND = Union[
-    _TYPE_SEND_MESSAGE,
-    _TYPE_ADD_SUBSCRIBER,
-    _TYPE_ADD_CHANNEL,
-    _TYPE_ADD_ROUTE,
-    _TYPE_ADD_TRANSFORMER
+    _CMD_SEND_MESSAGE,
+    _CMD_ADD_SUBSCRIBER,
+    _CMD_ADD_CHANNEL,
+    _CMD_ADD_ROUTE,
+    _CMD_ADD_TRANSFORMER
 ]
 
-_DELIMITER = ';;'
+_ENCODING = 'utf-8'
 API_PROTOCOL_VER = 1
 
 
@@ -61,7 +62,7 @@ class SendMessage(CommandType):
                  payload: str,
                  proto_ver: int = API_PROTOCOL_VER) -> None:
         self.proto_ver: str = str(proto_ver)
-        self.cmd_type: _TYPE_COMMAND = _TYPE_SEND_MESSAGE
+        self.cmd_type: _TYPE_COMMAND = _CMD_SEND_MESSAGE
         self.id: str = str(uuid.uuid4())
         self.route: str = route
         self.payload: str = payload
@@ -90,7 +91,7 @@ class AddSubscriber(CommandType):
                  address: str,
                  proto_ver: int = API_PROTOCOL_VER) -> None:
         self.proto_ver: str = str(proto_ver)
-        self.cmd_type: _TYPE_COMMAND = _TYPE_ADD_SUBSCRIBER
+        self.cmd_type: _TYPE_COMMAND = _CMD_ADD_SUBSCRIBER
         self.id: str = str(uuid.uuid4())
         self.route = route
         self.channel = channel
@@ -115,7 +116,7 @@ class AddChannel(CommandType):
                  name: str,
                  proto_ver: int = API_PROTOCOL_VER) -> None:
         self.proto_ver: str = str(proto_ver)
-        self.cmd_type: _TYPE_COMMAND = _TYPE_ADD_CHANNEL
+        self.cmd_type: _TYPE_COMMAND = _CMD_ADD_CHANNEL
         self.id: str = str(uuid.uuid4())
         self.route = route
         self.name = name
@@ -137,7 +138,7 @@ class AddRoute(CommandType):
                  name: str,
                  proto_ver: int = API_PROTOCOL_VER) -> None:
         self.proto_ver: str = str(proto_ver)
-        self.cmd_type: _TYPE_COMMAND = _TYPE_ADD_ROUTE
+        self.cmd_type: _TYPE_COMMAND = _CMD_ADD_ROUTE
         self.id: str = str(uuid.uuid4())
         self.name = name
 
@@ -164,7 +165,7 @@ class AddTransformer(CommandType):
                  address: str,
                  proto_ver: int = API_PROTOCOL_VER) -> None:
         self.proto_ver: str = str(proto_ver)
-        self.cmd_type: _TYPE_COMMAND = _TYPE_ADD_TRANSFORMER
+        self.cmd_type: _TYPE_COMMAND = _CMD_ADD_TRANSFORMER
         self.id: str = str(uuid.uuid4())
         self.route = route
         self.channel = channel
@@ -173,11 +174,40 @@ class AddTransformer(CommandType):
 
 # --------Message Handling-----------------------------------------------------
 
-def _serialize_message(msg: CommandType) -> str:
+def _encode_uvarint(n: int) -> bytes:
+    """Encode an unsigned integer as LEB128 (uvarint).
+    Will convert n to absolute.
+
+    Args:
+        n (int): Non-negative integer to encode.
+    Returns:
+        bytes: LEB128-encoded unsigned varint.
+    """
+    n = abs(n)
+    out = bytearray()
+    while True:
+        b = n & 0x7F
+        n >>= 7
+        out.append(b | (0x80 if n else 0))
+        if not n:
+            break
+
+    return bytes(out)
+
+
+def _serialize_message(msg: CommandType) -> bytes:
     # Mainly a stub, could probably be removed, but I wanted a separate
     # location for string message assembly incase it ever changes.
-    tokens = list(msg.__dict__.values())
-    return _DELIMITER.join(tokens)
+    fields: list[str] = list(msg.__dict__.values())
+    parts: list[bytes] = []
+    for f in fields:
+        body = f.encode(_ENCODING)
+        if len(body) == 0:
+            continue
+        parts.append(_encode_uvarint(len(body)))
+        parts.append(body)
+
+    return b''.join(parts)
 
 
 def process_command(message: CommandType, address: str, port: int) -> None:
@@ -186,10 +216,11 @@ def process_command(message: CommandType, address: str, port: int) -> None:
     or `mycelia.AddRoute`.
     """
     payload = _serialize_message(message)
+    frame = _encode_uvarint(len(payload)) + payload
 
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.connect((address, port))
-        sock.sendall(payload.encode('utf-8'))
+        sock.sendall(frame)
 
 
 # --------Network Boilerplate--------------------------------------------------
