@@ -9,8 +9,6 @@ from typing import Union
 __all__ = [
     'SendMessage',
     'AddSubscriber',
-    'AddChannel',
-    'AddRoute',
     'AddTransformer',
     'process_command',
     'get_local_ipv4',
@@ -20,15 +18,11 @@ __all__ = [
 # Version 1 of the command API does not support sub-command parsing.
 # The <object>.<action> syntax is the conform to future version feature syntax.
 _CMD_SEND_MESSAGE = 'MESSAGE.SEND'
-_CMD_ADD_ROUTE = 'ROUTE.ADD'
-_CMD_ADD_CHANNEL = 'CHANNEL.ADD'
 _CMD_ADD_TRANSFORMER = 'TRANSFORMER.ADD'
 _CMD_ADD_SUBSCRIBER = 'SUBSCRIBER.ADD'
 
 _TYPE_COMMAND = Union[
     _CMD_SEND_MESSAGE,
-    _CMD_ADD_ROUTE,
-    _CMD_ADD_CHANNEL,
     _CMD_ADD_TRANSFORMER,
     _CMD_ADD_SUBSCRIBER
 ]
@@ -65,45 +59,6 @@ class SendMessage(CommandType):
         self.id: str = str(uuid.uuid4())
         self.route: str = route
         self.payload: str = payload
-
-
-class AddRoute(CommandType):
-    """A CommandType that will register a route on a Mycelia instance.
-
-    Args:
-        name (str): The name of the route. Messages containing this name
-         in their route field will be sent down channels in this route.
-        proto_ver (int): The protocol version, defaults to API_PROTOCOL_VER.
-    """
-
-    def __init__(self,
-                 name: str,
-                 proto_ver: int = API_PROTOCOL_VER) -> None:
-        self.proto_ver: str = str(proto_ver)
-        self.cmd_type: _TYPE_COMMAND = _CMD_ADD_ROUTE
-        self.id: str = str(uuid.uuid4())
-        self.name = name
-
-
-class AddChannel(CommandType):
-    """A CommandType that will add a channel to a specified
-    route.
-
-    Args:
-        route (str): The route to add the channel to.
-        name (str): What to name the channel.
-        proto_ver (int): The protocol version, defaults to API_PROTOCOL_VER.
-    """
-
-    def __init__(self,
-                 route: str,
-                 name: str,
-                 proto_ver: int = API_PROTOCOL_VER) -> None:
-        self.proto_ver: str = str(proto_ver)
-        self.cmd_type: _TYPE_COMMAND = _CMD_ADD_CHANNEL
-        self.id: str = str(uuid.uuid4())
-        self.route = route
-        self.name = name
 
 
 class AddTransformer(CommandType):
