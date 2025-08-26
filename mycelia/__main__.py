@@ -33,14 +33,18 @@ API_PROTOCOL_VER = 1
 
 # --------Command Types--------------------------------------------------------
 
-class CommandType(object):
+class Command(object):
     """A CommandType is the type of functionality you wish to invoke in the
     Mycelia instance, such as sending a message, registering a route,
     adding a channel to a route, or adding a subscriber to a route + channel.
     """
 
+    @property
+    def tokens(self) -> list[str]:
+        raise NotImplementedError
 
-class SendMessage(CommandType):
+
+class SendMessage(Command):
     """A CommandType that will send a string message through the
     specified route.
 
@@ -60,8 +64,18 @@ class SendMessage(CommandType):
         self.route: str = route
         self.payload: str = payload
 
+    @property
+    def tokens(self) -> list[str]:
+        return [
+            self.proto_ver,
+            self.cmd_type,
+            self.id,
+            self.route,
+            self.payload
+        ]
 
-class AddTransformer(CommandType):
+
+class AddTransformer(Command):
     """A CommandType that will register a transformer on a route.
 
     Args:
@@ -86,8 +100,19 @@ class AddTransformer(CommandType):
         self.channel = channel
         self.address = address
 
+    @property
+    def tokens(self) -> list[str]:
+        return [
+            self.proto_ver,
+            self.cmd_type,
+            self.id,
+            self.route,
+            self.channel,
+            self.address
+        ]
 
-class AddSubscriber(CommandType):
+
+class AddSubscriber(object):
     """A CommandType that will add a subscriber to a specified
     route + channel.
 
@@ -113,6 +138,17 @@ class AddSubscriber(CommandType):
         self.channel = channel
         self.address = address
 
+    @property
+    def tokens(self) -> list[str]:
+        return [
+            self.proto_ver,
+            self.cmd_type,
+            self.id,
+            self.route,
+            self.channel,
+            self.address
+        ]
+
 
 # --------Message Handling-----------------------------------------------------
 
@@ -137,12 +173,11 @@ def _encode_uvarint(n: int) -> bytes:
     return bytes(out)
 
 
-def _serialize_message(msg: CommandType) -> bytes:
+def _serialize_message(msg: Command) -> bytes:
     # Mainly a stub, could probably be removed, but I wanted a separate
     # location for string message assembly incase it ever changes.
-    fields: list[str] = list(msg.__dict__.values())
     parts: list[bytes] = []
-    for f in fields:
+    for f in msg.tokens:
         body = f.encode(_ENCODING)
         if len(body) == 0:
             continue
@@ -152,7 +187,7 @@ def _serialize_message(msg: CommandType) -> bytes:
     return b''.join(parts)
 
 
-def process_command(message: CommandType, address: str, port: int) -> None:
+def process_command(message: Command, address: str, port: int) -> None:
     """Sends the CommandType message. The message type should be
     `mycelia.SendMessage`, `mycelia.AddSubscriber`, `mycelia.AddChannel`,
     or `mycelia.AddRoute`.
