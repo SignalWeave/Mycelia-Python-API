@@ -1,200 +1,181 @@
 from __future__ import annotations
 
 import socket
+import struct
 import threading
 import uuid
 from typing import Callable
+from typing import Optional
 from typing import Union
+from typing import cast
 
 __all__ = [
-    'SendMessage',
-    'AddSubscriber',
-    'AddTransformer',
+    'Message',
+    'Transformer',
+    'Subscriber',
+    'OBJ_MESSAGE',
+    'OBJ_TRANSFORMER',
+    'OBJ_SUBSCRIBER',
+    'CMD_SEND',
+    'CMD_ADD',
+    'CMD_REMOVE',
     'process_command',
     'get_local_ipv4',
     'MyceliaListener'
 ]
 
-# Version 1 of the command API does not support sub-command parsing.
-# The <object>.<action> syntax is the conform to future version feature syntax.
-_CMD_SEND_MESSAGE = 'MESSAGE.SEND'
-_CMD_ADD_TRANSFORMER = 'TRANSFORMER.ADD'
-_CMD_ADD_SUBSCRIBER = 'SUBSCRIBER.ADD'
+OBJ_MESSAGE = 1
+OBJ_TRANSFORMER = 2
+OBJ_SUBSCRIBER = 3
 
-_TYPE_COMMAND = Union[
-    _CMD_SEND_MESSAGE,
-    _CMD_ADD_TRANSFORMER,
-    _CMD_ADD_SUBSCRIBER
-]
+
+_CMD_UNKNOWN = 0
+CMD_SEND = 1
+CMD_ADD = 2
+CMD_REMOVE = 3
 
 _ENCODING = 'utf-8'
 API_PROTOCOL_VER = 1
 
+_PAYLOAD_TYPE = Union[str, bytes, bytearray, memoryview]
+
 
 # --------Command Types--------------------------------------------------------
 
-class Command(object):
-    """A CommandType is the type of functionality you wish to invoke in the
-    Mycelia instance, such as sending a message, registering a route,
-    adding a channel to a route, or adding a subscriber to a route + channel.
+class _MyceliaObj(object):
+    """A MyceliaObj is the type of functionality the user wishes to invoke in
+    the Mycelia instance, such as sending a message, adding a subscriber, or
+    removing a transformer from a route + channel.
+
+    The MyceliaObj represents the super command
+    { MESSAGE, TRANSFORM, SUBSCRIBE }, and it contains a command attr for the
+    sub command { SEND, ADD, REMOVE }.
     """
 
-    @property
-    def tokens(self) -> list[str]:
-        raise NotImplementedError
-
-
-class SendMessage(Command):
-    """A CommandType that will send a string message through the
-    specified route.
-
-    Args:
-        route (str): The route to send the message through.
-        payload (str): The data to forward to all subscribers.
-        proto_ver (int): The protocol version, defaults to API_PROTOCOL_VER.
-    """
-
-    def __init__(self,
-                 route: str,
-                 payload: str,
-                 proto_ver: int = API_PROTOCOL_VER) -> None:
-        self.proto_ver: str = str(proto_ver)
-        self.cmd_type: _TYPE_COMMAND = _CMD_SEND_MESSAGE
-        self.id: str = str(uuid.uuid4())
-        self.route: str = route
-        self.payload: str = payload
-
-    @property
-    def tokens(self) -> list[str]:
-        return [
-            self.proto_ver,
-            self.cmd_type,
-            self.id,
-            self.route,
-            self.payload
-        ]
-
-
-class AddTransformer(Command):
-    """A CommandType that will register a transformer on a route.
-
-    Args:
-        route (str): The route key that the subscriber will receive
-         message from.
-        channel (str): The channel name to subscribe to that exists
-         on the given route.
-        address (str): The address all messages should be forwarded
-         to from the Mycelia server.
-        proto_ver (int): The protocol version, defaults to API_PROTOCOL_VER.
-    """
-
-    def __init__(self,
-                 route: str,
-                 channel: str,
-                 address: str,
-                 proto_ver: int = API_PROTOCOL_VER) -> None:
-        self.proto_ver: str = str(proto_ver)
-        self.cmd_type: _TYPE_COMMAND = _CMD_ADD_TRANSFORMER
-        self.id: str = str(uuid.uuid4())
+    def __init__(self, obj_type: int, route: str) -> None:
+        self.protocol_version: int = API_PROTOCOL_VER
+        self.obj_type: int = obj_type
+        self.cmd_type: int = _CMD_UNKNOWN
+        self.uid: str = str(uuid.uuid4())
         self.route = route
+
+
+class Message(_MyceliaObj):
+    def __init__(self, route: str, payload: _PAYLOAD_TYPE) -> None:
+        super().__init__(OBJ_MESSAGE, route)
+        self.cmd_type = CMD_SEND
+        self.payload = payload
+
+
+class Transformer(_MyceliaObj):
+    def __init__(self, route: str, channel: str, address: str) -> None:
+        super().__init__(OBJ_TRANSFORMER, route)
+        self.cmd_type = CMD_ADD
         self.channel = channel
         self.address = address
 
-    @property
-    def tokens(self) -> list[str]:
-        return [
-            self.proto_ver,
-            self.cmd_type,
-            self.id,
-            self.route,
-            self.channel,
-            self.address
-        ]
 
-
-class AddSubscriber(object):
-    """A CommandType that will add a subscriber to a specified
-    route + channel.
-
-    Args:
-        route (str): The route key that the subscriber will receive
-         message from.
-        channel (str): The channel name to subscribe to that exists
-         on the given route.
-        address (str): The address all messages should be forwarded
-         to from the Mycelia server.
-        proto_ver (int): The protocol version, defaults to API_PROTOCOL_VER.
-    """
-
-    def __init__(self,
-                 route: str,
-                 channel: str,
-                 address: str,
-                 proto_ver: int = API_PROTOCOL_VER) -> None:
-        self.proto_ver: str = str(proto_ver)
-        self.cmd_type: _TYPE_COMMAND = _CMD_ADD_SUBSCRIBER
-        self.id: str = str(uuid.uuid4())
-        self.route = route
+class Subscriber(_MyceliaObj):
+    def __init__(self, route: str, channel: str, address: str) -> None:
+        super().__init__(OBJ_SUBSCRIBER, route)
+        self.cmd_type = CMD_ADD
         self.channel = channel
         self.address = address
-
-    @property
-    def tokens(self) -> list[str]:
-        return [
-            self.proto_ver,
-            self.cmd_type,
-            self.id,
-            self.route,
-            self.channel,
-            self.address
-        ]
 
 
 # --------Message Handling-----------------------------------------------------
 
-def _encode_uvarint(n: int) -> bytes:
-    """Encode an unsigned integer as LEB128 (uvarint).
-    Will convert n to absolute.
+def _u32(n: int) -> bytes:
+    """Pack unsigned 32-bit int as big-endian."""
+    return struct.pack('>I', n & 0xFFFFFFFF)
+
+
+def _pstr(s: str) -> bytes:
+    """Length-prefixed string: [u32 len][bytes]."""
+    b = s.encode(_ENCODING)
+    return _u32(len(b)) + b
+
+
+def _pbytes(b: bytes) -> bytes:
+    """Length-prefixed bytes: [u32 len][bytes]."""
+    bb = bytes(b)
+    return _u32(len(bb)) + bb
+
+
+def _resolve_cmd_type(obj: '_MyceliaObj') -> int:
+    """Return effective command type, using defaults if unknown."""
+    if getattr(obj, 'cmd_type', _CMD_UNKNOWN) != _CMD_UNKNOWN:
+        return obj.cmd_type
+    if obj.obj_type == OBJ_MESSAGE:
+        return CMD_SEND
+    if obj.obj_type in (OBJ_SUBSCRIBER, OBJ_TRANSFORMER):
+        return CMD_ADD
+    raise ValueError(f'unknown cmd_type')
+
+
+def _encode_mycelia_obj(obj: _MyceliaObj) -> bytes:
+    """Encode a _MyceliaObj into protocol bytes.
+
+    Layout (big-endian):
+      [u32 proto_ver]
+      [u32 obj_type]
+      [u32 obj_cmd]
+      [u32 len][uid bytes]
+      [u32 len][route bytes]
+      then one of:
+        - if obj_type == OBJ_MESSAGE:
+            [u32 len][payload bytes]
+        - if obj_type in { OBJ_SUBSCRIBER, OBJ_TRANSFORMER }:
+            [u32 len][channel bytes]
+            [u32 len][address bytes]
 
     Args:
-        n (int): Non-negative integer to encode.
+        obj: Any _MyceliaObj (Message, Subscriber, Transformer).
     Returns:
-        bytes: LEB128-encoded unsigned varint.
+        Encoded byte sequence.
+    Raises:
+        ValueError: If obj has an unknown obj_type or missing required fields.
+        TypeError: If payload type is unsupported.
     """
-    n = abs(n)
+    # -----Header-----
+    proto_ver = int(getattr(obj, 'protocol_version', API_PROTOCOL_VER))
+    obj_type = int(obj.obj_type)
+    cmd_type = _resolve_cmd_type(obj)
+    uid = cast(str, obj.uid)
+    route = cast(str, obj.route)
+
     out = bytearray()
-    while True:
-        b = n & 0x7F
-        n >>= 7
-        out.append(b | (0x80 if n else 0))
-        if not n:
-            break
+    out += _u32(proto_ver)
+    out += _u32(obj_type)
+    out += _u32(cmd_type)
+    out += _pstr(uid)
+    out += _pstr(route)
 
-    return bytes(out)
+    # -----Body-----
+    if obj_type == OBJ_MESSAGE:
+        payload = getattr(obj, 'payload', b'')
+        if isinstance(payload, str):
+            payload = payload.encode(_ENCODING)
+        elif not isinstance(payload, (bytes, bytearray, memoryview)):
+            raise TypeError('payload must be str or bytes-like')
+        out += _pbytes(payload)
+    elif obj_type in (OBJ_SUBSCRIBER, OBJ_TRANSFORMER):
+        channel = cast(str, getattr(obj, 'channel'))
+        address = cast(str, getattr(obj, 'address'))
+        out += _pstr(channel)
+        out += _pstr(address)
+    else:
+        raise ValueError(f'unknown obj_type: {obj_type}')
+
+    packet_bytes = bytes(out)
+    packet = _u32(len(packet_bytes)) + packet_bytes
+
+    return packet
 
 
-def _serialize_message(msg: Command) -> bytes:
-    # Mainly a stub, could probably be removed, but I wanted a separate
-    # location for string message assembly incase it ever changes.
-    parts: list[bytes] = []
-    for f in msg.tokens:
-        body = f.encode(_ENCODING)
-        if len(body) == 0:
-            continue
-        parts.append(_encode_uvarint(len(body)))
-        parts.append(body)
-
-    return b''.join(parts)
-
-
-def process_command(message: Command, address: str, port: int) -> None:
-    """Sends the CommandType message. The message type should be
-    `mycelia.SendMessage`, `mycelia.AddSubscriber`, `mycelia.AddChannel`,
-    or `mycelia.AddRoute`.
-    """
-    payload = _serialize_message(message)
-    frame = _encode_uvarint(len(payload)) + payload
-
+def process_command(message: _MyceliaObj, address: str, port: int) -> None:
+    """Sends the CommandType message."""
+    frame = _encode_mycelia_obj(message)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.connect((address, port))
         sock.sendall(frame)
@@ -234,7 +215,7 @@ class MyceliaListener(object):
     """
 
     def __init__(self,
-                 message_processor: Callable[[bytes], None],
+                 message_processor: Callable[[bytes], Optional[bytes]],
                  local_addr: str = _LOCAL_IPv4,
                  local_port: int = 5500) -> None:
         """
@@ -277,7 +258,9 @@ class MyceliaListener(object):
                     if not payload:
                         break
 
-                    self._message_processor(payload)
+                    result = self._message_processor(payload)
+                    if result is not None:
+                        conn.sendall(result)
 
     def start(self) -> None:
         """Blocking call that starts the socket listener loop."""
