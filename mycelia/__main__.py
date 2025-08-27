@@ -85,6 +85,11 @@ class Subscriber(_MyceliaObj):
 
 # --------Message Handling-----------------------------------------------------
 
+def _u8(n: int) -> bytes:
+    """Pack unsigned 8-bit int."""
+    return struct.pack('>B', n & 0xFF)
+
+
 def _u32(n: int) -> bytes:
     """Pack unsigned 32-bit int as big-endian."""
     return struct.pack('>I', n & 0xFFFFFFFF)
@@ -145,9 +150,9 @@ def _encode_mycelia_obj(obj: _MyceliaObj) -> bytes:
     route = cast(str, obj.route)
 
     out = bytearray()
-    out += _u32(proto_ver)
-    out += _u32(obj_type)
-    out += _u32(cmd_type)
+    out += _u8(proto_ver)
+    out += _u8(obj_type)
+    out += _u8(cmd_type)
     out += _pstr(uid)
     out += _pstr(route)
 
