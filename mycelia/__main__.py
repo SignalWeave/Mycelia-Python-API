@@ -133,7 +133,7 @@ class Globals(_MyceliaObj):
             data['address'] = payload.address
         if 0 < payload.port < 65536:
             data['port'] = payload.port
-        if payload.verbosity > -1:
+        if -1 < payload.verbosity < 4:
             data['verbosity'] = payload.verbosity
         if type(payload.print_tree) is bool:
             data['print_tree'] = payload.print_tree
