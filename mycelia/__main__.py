@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import socket
 import struct
 import threading
@@ -13,6 +14,8 @@ __all__ = [
     'Message',
     'Transformer',
     'Subscriber',
+    'GlobalValues',
+    'Globals',
     'OBJ_MESSAGE',
     'OBJ_TRANSFORMER',
     'OBJ_SUBSCRIBER',
@@ -27,11 +30,13 @@ __all__ = [
 OBJ_MESSAGE = 1
 OBJ_TRANSFORMER = 2
 OBJ_SUBSCRIBER = 3
+OBJ_GLOBALS = 4
 
 _CMD_UNKNOWN = 0
 CMD_SEND = 1
 CMD_ADD = 2
 CMD_REMOVE = 3
+CMD_UPDATE = 4
 
 _ENCODING = 'utf-8'
 API_PROTOCOL_VER = 1
@@ -51,24 +56,37 @@ class _MyceliaObj(object):
     sub command { SEND, ADD, REMOVE }.
     """
 
-    def __init__(self, obj_type: int, route: str) -> None:
+    def __init__(self, obj_type: int) -> None:
         self.protocol_version: int = API_PROTOCOL_VER
         self.obj_type: int = obj_type
         self.cmd_type: int = _CMD_UNKNOWN
         self.uid: str = str(uuid.uuid4())
-        self.route = route
 
 
 class Message(_MyceliaObj):
     def __init__(self, route: str, payload: _PAYLOAD_TYPE) -> None:
-        super().__init__(OBJ_MESSAGE, route)
+        """
+        Args:
+            route (str): Which route the Message will travel through.
+            payload (Union[str, bytes, bytearray, memoryview]): The data to
+             send to the broker.
+        """
+        super().__init__(OBJ_MESSAGE)
+        self.route = route
         self.cmd_type = CMD_SEND
         self.payload = payload
 
 
 class Transformer(_MyceliaObj):
     def __init__(self, route: str, channel: str, address: str) -> None:
-        super().__init__(OBJ_TRANSFORMER, route)
+        """
+        Args:
+            route (str): Which route the Message will travel through.
+            channel (str): which channel to add the transformer to.
+            address (str): Where the channel should forward the data to.
+        """
+        super().__init__(OBJ_TRANSFORMER)
+        self.route = route
         self.cmd_type = CMD_ADD
         self.channel = channel
         self.address = address
@@ -76,10 +94,56 @@ class Transformer(_MyceliaObj):
 
 class Subscriber(_MyceliaObj):
     def __init__(self, route: str, channel: str, address: str) -> None:
-        super().__init__(OBJ_SUBSCRIBER, route)
+        """
+        Args:
+            route (str): Which route the Message will travel through.
+            channel (str): which channel to add the subscriber to.
+            address (str): Where the channel should forward the data to.
+        """
+        super().__init__(OBJ_SUBSCRIBER)
+        self.route = route
         self.cmd_type = CMD_ADD
         self.channel = channel
         self.address = address
+
+
+class GlobalValues(object):
+    """The data struct that the broker should update values from.
+    Only change the values that you need.
+    """
+    address: str = ''
+    port: int = -1
+    verbosity: int = -1
+    print_tree: bool = None
+    transform_timeout: str = ''
+
+
+class Globals(_MyceliaObj):
+    def __init__(self, payload: GlobalValues) -> None:
+        """
+        Args:
+            payload (GlobalValues): The struct object mycelia.GlobalValues that
+             contains the updated values.
+        """
+        super().__init__(OBJ_GLOBALS)
+        self.cmd_type = CMD_UPDATE
+
+        data = {}
+        if payload.address != '':
+            data['address'] = payload.address
+        if payload.port > 0:
+            data['port'] = payload.port
+        if payload.verbosity > -1:
+            data['verbosity'] = payload.verbosity
+        if type(payload.print_tree) is bool:
+            data['print_tree'] = payload.print_tree
+        if payload.transform_timeout != '':
+            data['transform_timeout'] = payload.transform_timeout
+
+        if not data:
+            raise ValueError('No valid GlobalValues were added.')
+
+        self.payload = json.dumps(data)
 
 
 # --------Message Handling-----------------------------------------------------
@@ -112,6 +176,8 @@ def _resolve_cmd_type(obj: '_MyceliaObj') -> int:
         return obj.cmd_type
     if obj.obj_type == OBJ_MESSAGE:
         return CMD_SEND
+    if obj.obj_type == OBJ_GLOBALS:
+        return CMD_UPDATE
     if obj.obj_type in (OBJ_SUBSCRIBER, OBJ_TRANSFORMER):
         return CMD_ADD
     raise ValueError(f'unknown cmd_type')
@@ -146,17 +212,21 @@ def _encode_mycelia_obj(obj: _MyceliaObj) -> bytes:
     obj_type = int(obj.obj_type)
     cmd_type = _resolve_cmd_type(obj)
     uid = cast(str, obj.uid)
-    route = cast(str, obj.route)
 
     out = bytearray()
     out += _u8(proto_ver)
     out += _u8(obj_type)
     out += _u8(cmd_type)
+
+    # -----Sub-Header-----
     out += _pstr(uid)
-    out += _pstr(route)
+
+    if obj_type in (OBJ_MESSAGE, OBJ_SUBSCRIBER, OBJ_TRANSFORMER):
+        route = cast(str, getattr(obj, 'route'))
+        out += _pstr(route)
 
     # -----Body-----
-    if obj_type == OBJ_MESSAGE:
+    if obj_type in (OBJ_MESSAGE, OBJ_GLOBALS):
         payload = getattr(obj, 'payload', b'')
         if isinstance(payload, str):
             payload = payload.encode(_ENCODING)
@@ -249,7 +319,7 @@ class MyceliaListener(object):
             except socket.timeout:
                 continue
             except OSError:
-                break  # Socket was closed
+                raise OSError('Socket was closed')
 
             with conn:
                 print(f'Connected by {addr}')
@@ -257,7 +327,7 @@ class MyceliaListener(object):
                     try:
                         payload = conn.recv(1024)
                     except OSError:
-                        break
+                        raise OSError('Payload buffer overflow.')
 
                     if not payload:
                         break
