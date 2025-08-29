@@ -131,7 +131,7 @@ class Globals(_MyceliaObj):
         data = {}
         if payload.address != '':
             data['address'] = payload.address
-        if payload.port > 0:
+        if 0 < payload.port < 65536:
             data['port'] = payload.port
         if payload.verbosity > -1:
             data['verbosity'] = payload.verbosity
