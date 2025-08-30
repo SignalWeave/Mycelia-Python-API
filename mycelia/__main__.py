@@ -8,7 +8,7 @@ import uuid
 from typing import Callable
 from typing import Optional
 from typing import Union
-from typing import cast
+
 
 __all__ = [
     'Message',
@@ -16,13 +16,10 @@ __all__ = [
     'Subscriber',
     'GlobalValues',
     'Globals',
-    'OBJ_MESSAGE',
-    'OBJ_TRANSFORMER',
-    'OBJ_SUBSCRIBER',
     'CMD_SEND',
     'CMD_ADD',
     'CMD_REMOVE',
-    'process_command',
+    'send',
     'get_local_ipv4',
     'MyceliaListener'
 ]
@@ -52,59 +49,97 @@ class _MyceliaObj(object):
     removing a transformer from a route + channel.
 
     The MyceliaObj represents the super command
-    { MESSAGE, TRANSFORM, SUBSCRIBE }, and it contains a command attr for the
-    sub command { SEND, ADD, REMOVE }.
+    { MESSAGE, TRANSFORM, SUBSCRIBE, GLOBALS, ... }, and it contains a command
+    attr for the sub command { SEND, ADD, REMOVE, UPDATE, ... }.
     """
 
     def __init__(self, obj_type: int) -> None:
         self.protocol_version: int = API_PROTOCOL_VER
         self.obj_type: int = obj_type
         self.cmd_type: int = _CMD_UNKNOWN
-        self.uid: str = str(uuid.uuid4())
+        self.sender_address: str = ''
+        self.arg1: str = ''
+        self.arg2: str = ''
+        self.arg3: str = ''
+        self.arg4: str = ''
+        self.payload: _PAYLOAD_TYPE = ''
+
+    @property
+    def cmd_valid(self) -> bool:
+        raise NotImplementedError
 
 
 class Message(_MyceliaObj):
-    def __init__(self, route: str, payload: _PAYLOAD_TYPE) -> None:
+    def __init__(self,
+                 senders_address: str,
+                 route: str,
+                 payload: _PAYLOAD_TYPE) -> None:
         """
         Args:
+            senders_address (str): Address the message is coming from.
             route (str): Which route the Message will travel through.
             payload (Union[str, bytes, bytearray, memoryview]): The data to
              send to the broker.
         """
         super().__init__(OBJ_MESSAGE)
-        self.route = route
         self.cmd_type = CMD_SEND
+        self.sender_address = senders_address
+        self.arg1 = route
         self.payload = payload
+
+    @property
+    def cmd_valid(self) -> bool:
+        return self.cmd_type == CMD_SEND
 
 
 class Transformer(_MyceliaObj):
-    def __init__(self, route: str, channel: str, address: str) -> None:
+    def __init__(self,
+                 senders_address: str,
+                 route: str,
+                 channel: str,
+                 address: str) -> None:
         """
         Args:
+            senders_address (str): Address the message is coming from.
             route (str): Which route the Message will travel through.
             channel (str): which channel to add the transformer to.
             address (str): Where the channel should forward the data to.
         """
         super().__init__(OBJ_TRANSFORMER)
-        self.route = route
         self.cmd_type = CMD_ADD
-        self.channel = channel
-        self.address = address
+        self.sender_address = senders_address
+        self.arg1 = route
+        self.arg2 = channel
+        self.arg3 = address
+
+    @property
+    def cmd_valid(self) -> bool:
+        return self.cmd_type in (CMD_ADD, CMD_REMOVE)
 
 
 class Subscriber(_MyceliaObj):
-    def __init__(self, route: str, channel: str, address: str) -> None:
+    def __init__(self,
+                 senders_address: str,
+                 route: str,
+                 channel: str,
+                 address: str) -> None:
         """
         Args:
+            senders_address (str): Address the message is coming from.
             route (str): Which route the Message will travel through.
             channel (str): which channel to add the subscriber to.
             address (str): Where the channel should forward the data to.
         """
         super().__init__(OBJ_SUBSCRIBER)
-        self.route = route
         self.cmd_type = CMD_ADD
-        self.channel = channel
-        self.address = address
+        self.sender_address = senders_address
+        self.arg1 = route
+        self.arg2 = channel
+        self.arg3 = address
+
+    @property
+    def cmd_valid(self) -> bool:
+        return self.cmd_type in (CMD_ADD, CMD_REMOVE)
 
 
 class GlobalValues(object):
@@ -119,14 +154,16 @@ class GlobalValues(object):
 
 
 class Globals(_MyceliaObj):
-    def __init__(self, payload: GlobalValues) -> None:
+    def __init__(self, senders_address: str, payload: GlobalValues) -> None:
         """
         Args:
+            senders_address (str): Address the message is coming from.
             payload (GlobalValues): The struct object mycelia.GlobalValues that
              contains the updated values.
         """
         super().__init__(OBJ_GLOBALS)
         self.cmd_type = CMD_UPDATE
+        self.sender_address = senders_address
 
         data = {}
         if payload.address != '':
@@ -145,6 +182,10 @@ class Globals(_MyceliaObj):
 
         self.payload = json.dumps(data)
 
+    @property
+    def cmd_valid(self) -> bool:
+        return self.cmd_type == CMD_UPDATE
+
 
 # --------Message Handling-----------------------------------------------------
 
@@ -153,21 +194,38 @@ def _u8(n: int) -> bytes:
     return struct.pack('>B', n & 0xFF)
 
 
+def _u16(n: int) -> bytes:
+    """Pack unsigned 16-bit int."""
+    return struct.pack('>H', n & 0xFFFF)
+
+
 def _u32(n: int) -> bytes:
     """Pack unsigned 32-bit int as big-endian."""
     return struct.pack('>I', n & 0xFFFFFFFF)
 
 
-def _pstr(s: str) -> bytes:
+def _pstr8(s: str) -> bytes:
+    """Length-prefixed string: [u8 len][bytes]."""
+    b = s.encode(_ENCODING)
+    return _u8(len(b)) + b
+
+
+def _pstr16(s: str) -> bytes:
+    """Length-prefixed string: [u16 len][bytes]."""
+    b = s.encode(_ENCODING)
+    return _u16(len(b)) + b
+
+
+def _pstr32(s: str) -> bytes:
     """Length-prefixed string: [u32 len][bytes]."""
     b = s.encode(_ENCODING)
     return _u32(len(b)) + b
 
 
-def _pbytes(b: bytes) -> bytes:
-    """Length-prefixed bytes: [u32 len][bytes]."""
+def _pbytes16(b: bytes) -> bytes:
+    """Length-prefixed bytes: [u16 len][bytes]."""
     bb = bytes(b)
-    return _u32(len(bb)) + bb
+    return _u16(len(bb)) + bb
 
 
 def _resolve_cmd_type(obj: '_MyceliaObj') -> int:
@@ -184,62 +242,33 @@ def _resolve_cmd_type(obj: '_MyceliaObj') -> int:
 
 
 def _encode_mycelia_obj(obj: _MyceliaObj) -> bytes:
-    """Encode a _MyceliaObj into protocol bytes.
-
-    Layout (big-endian):
-      [u32 proto_ver]
-      [u32 obj_type]
-      [u32 obj_cmd]
-      [u32 len][uid bytes]
-      [u32 len][route bytes]
-      then one of:
-        - if obj_type == OBJ_MESSAGE:
-            [u32 len][payload bytes]
-        - if obj_type in { OBJ_SUBSCRIBER, OBJ_TRANSFORMER }:
-            [u32 len][channel bytes]
-            [u32 len][address bytes]
-
-    Args:
-        obj: Any _MyceliaObj (Message, Subscriber, Transformer).
-    Returns:
-        Encoded byte sequence.
-    Raises:
-        ValueError: If obj has an unknown obj_type or missing required fields.
-        TypeError: If payload type is unsupported.
-    """
-    # -----Header-----
-    proto_ver = int(getattr(obj, 'protocol_version', API_PROTOCOL_VER))
-    obj_type = int(obj.obj_type)
-    cmd_type = _resolve_cmd_type(obj)
-    uid = cast(str, obj.uid)
+    if not obj.cmd_valid:
+        raise ValueError(f'Message command {obj.cmd_type} not permissible!')
 
     out = bytearray()
-    out += _u8(proto_ver)
-    out += _u8(obj_type)
-    out += _u8(cmd_type)
 
-    # -----Sub-Header-----
-    out += _pstr(uid)
+    # -----Fixed Header-----
+    out += _u8(obj.protocol_version)
+    out += _u8(obj.obj_type)
+    out += _u8(obj.cmd_type)
 
-    if obj_type in (OBJ_MESSAGE, OBJ_SUBSCRIBER, OBJ_TRANSFORMER):
-        route = cast(str, getattr(obj, 'route'))
-        out += _pstr(route)
+    # -----Tracking Sub-Header-----
+    out += _pstr8(str(uuid.uuid4()))
+    if obj.sender_address == '':
+        raise ValueError("Message is missing sender's address!")
+    out += _pstr16(obj.sender_address)
 
-    # -----Body-----
-    if obj_type in (OBJ_MESSAGE, OBJ_GLOBALS):
-        payload = getattr(obj, 'payload', b'')
-        if isinstance(payload, str):
-            payload = payload.encode(_ENCODING)
-        elif not isinstance(payload, (bytes, bytearray, memoryview)):
-            raise TypeError('payload must be str or bytes-like')
-        out += _pbytes(payload)
-    elif obj_type in (OBJ_SUBSCRIBER, OBJ_TRANSFORMER):
-        channel = cast(str, getattr(obj, 'channel'))
-        address = cast(str, getattr(obj, 'address'))
-        out += _pstr(channel)
-        out += _pstr(address)
-    else:
-        raise ValueError(f'unknown obj_type: {obj_type}')
+    # -----Command Arguments-----
+    needs_args = (OBJ_MESSAGE, OBJ_SUBSCRIBER, OBJ_TRANSFORMER)
+    if obj.obj_type in needs_args and obj.arg1 == '':
+        raise ValueError(f'Message {obj.obj_type} has incomplete args!')
+    out += _pstr8(obj.arg1)
+    out += _pstr8(obj.arg2)
+    out += _pstr8(obj.arg3)
+    out += _pstr8(obj.arg4)
+
+    # -----Payload-----
+    out += _pbytes16(obj.payload.encode(_ENCODING))
 
     packet_bytes = bytes(out)
     packet = _u32(len(packet_bytes)) + packet_bytes
@@ -247,7 +276,7 @@ def _encode_mycelia_obj(obj: _MyceliaObj) -> bytes:
     return packet
 
 
-def process_command(message: _MyceliaObj, address: str, port: int) -> None:
+def send(message: _MyceliaObj, address: str, port: int) -> None:
     """Sends the CommandType message."""
     frame = _encode_mycelia_obj(message)
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
@@ -320,6 +349,9 @@ class MyceliaListener(object):
                 continue
             except OSError:
                 raise OSError('Socket was closed')
+            except KeyboardInterrupt:
+                print('Exiting on keyboard interrupt.')
+                return
 
             with conn:
                 print(f'Connected by {addr}')
