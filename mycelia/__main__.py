@@ -41,6 +41,10 @@ API_PROTOCOL_VER = 1
 _PAYLOAD_TYPE = Union[str, bytes, bytearray, memoryview]
 
 
+class MissingSecurityTokenError(Exception):
+    """User has not provided a security token."""
+
+
 # --------Command Types--------------------------------------------------------
 
 class _MyceliaObj(object):
@@ -152,6 +156,7 @@ class GlobalValues(object):
     print_tree: Optional[bool] = None
     transform_timeout: str = ''
     consolidate: Optional[bool] = None
+    security_token: str = ''
 
 
 class Globals(_MyceliaObj):
@@ -179,6 +184,10 @@ class Globals(_MyceliaObj):
             data['transform_timeout'] = payload.transform_timeout
         if type(payload.consolidate) is bool:
             data['consolidate'] = payload.consolidate
+        if payload.security_token == '':
+            raise MissingSecurityTokenError()
+        else:
+            data['security-token'] = payload.security_token
 
         if not data:
             raise ValueError('No valid GlobalValues were added.')
@@ -231,19 +240,6 @@ def _pbytes16(b: bytes) -> bytes:
     return _u16(len(bb)) + bb
 
 
-def _resolve_cmd_type(obj: '_MyceliaObj') -> int:
-    """Return effective command type, using defaults if unknown."""
-    if getattr(obj, 'cmd_type', _CMD_UNKNOWN) != _CMD_UNKNOWN:
-        return obj.cmd_type
-    if obj.obj_type == OBJ_MESSAGE:
-        return CMD_SEND
-    if obj.obj_type == OBJ_GLOBALS:
-        return CMD_UPDATE
-    if obj.obj_type in (OBJ_SUBSCRIBER, OBJ_TRANSFORMER):
-        return CMD_ADD
-    raise ValueError(f'unknown cmd_type')
-
-
 def _encode_mycelia_obj(obj: _MyceliaObj) -> bytes:
     if not obj.cmd_valid:
         raise ValueError(f'Message command {obj.cmd_type} not permissible!')
@@ -264,7 +260,7 @@ def _encode_mycelia_obj(obj: _MyceliaObj) -> bytes:
     # -----Command Arguments-----
     needs_args = (OBJ_MESSAGE, OBJ_SUBSCRIBER, OBJ_TRANSFORMER)
     if obj.obj_type in needs_args and obj.arg1 == '':
-        raise ValueError(f'Message {obj.obj_type} has incomplete args!')
+        raise ValueError(f'Message has incomplete args!')
     out += _pstr8(obj.arg1)
     out += _pstr8(obj.arg2)
     out += _pstr8(obj.arg3)
