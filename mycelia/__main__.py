@@ -61,7 +61,7 @@ class _MyceliaObj(object):
         self.protocol_version: int = API_PROTOCOL_VER
         self.obj_type: int = obj_type
         self.cmd_type: int = _CMD_UNKNOWN
-        self.sender_address: str = ''
+        self.return_address: str = ''
         self.arg1: str = ''
         self.arg2: str = ''
         self.arg3: str = ''
@@ -75,19 +75,20 @@ class _MyceliaObj(object):
 
 class Message(_MyceliaObj):
     def __init__(self,
-                 senders_address: str,
+                 return_address: str,
                  route: str,
                  payload: _PAYLOAD_TYPE) -> None:
         """
         Args:
-            senders_address (str): Address the message is coming from.
+            return_address (str): Address the broker should respond to with
+             updates.
             route (str): Which route the Message will travel through.
             payload (Union[str, bytes, bytearray, memoryview]): The data to
              send to the broker.
         """
         super().__init__(OBJ_MESSAGE)
         self.cmd_type = CMD_SEND
-        self.sender_address = senders_address
+        self.return_address = return_address
         self.arg1 = route
         self.payload = payload
 
@@ -98,20 +99,21 @@ class Message(_MyceliaObj):
 
 class Transformer(_MyceliaObj):
     def __init__(self,
-                 senders_address: str,
+                 return_address: str,
                  route: str,
                  channel: str,
                  address: str) -> None:
         """
         Args:
-            senders_address (str): Address the message is coming from.
+            return_address (str): Address the broker should respond to with
+             updates.
             route (str): Which route the Message will travel through.
             channel (str): which channel to add the transformer to.
             address (str): Where the channel should forward the data to.
         """
         super().__init__(OBJ_TRANSFORMER)
         self.cmd_type = CMD_ADD
-        self.sender_address = senders_address
+        self.return_address = return_address
         self.arg1 = route
         self.arg2 = channel
         self.arg3 = address
@@ -123,20 +125,21 @@ class Transformer(_MyceliaObj):
 
 class Subscriber(_MyceliaObj):
     def __init__(self,
-                 senders_address: str,
+                 return_address: str,
                  route: str,
                  channel: str,
                  address: str) -> None:
         """
         Args:
-            senders_address (str): Address the message is coming from.
+            return_address (str): Address the broker should respond to with
+             updates.
             route (str): Which route the Message will travel through.
             channel (str): which channel to add the subscriber to.
             address (str): Where the channel should forward the data to.
         """
         super().__init__(OBJ_SUBSCRIBER)
         self.cmd_type = CMD_ADD
-        self.sender_address = senders_address
+        self.return_address = return_address
         self.arg1 = route
         self.arg2 = channel
         self.arg3 = address
@@ -160,16 +163,17 @@ class GlobalValues(object):
 
 
 class Globals(_MyceliaObj):
-    def __init__(self, senders_address: str, payload: GlobalValues) -> None:
+    def __init__(self, return_address: str, payload: GlobalValues) -> None:
         """
         Args:
-            senders_address (str): Address the message is coming from.
+            return_address (str): Address the broker should respond to with
+             updates.
             payload (GlobalValues): The struct object mycelia.GlobalValues that
              contains the updated values.
         """
         super().__init__(OBJ_GLOBALS)
         self.cmd_type = CMD_UPDATE
-        self.sender_address = senders_address
+        self.return_address = return_address
 
         data = {}
         if payload.address != '':
@@ -253,9 +257,9 @@ def _encode_mycelia_obj(obj: _MyceliaObj) -> bytes:
 
     # -----Tracking Sub-Header-----
     out += _pstr8(str(uuid.uuid4()))
-    if obj.sender_address == '':
+    if obj.return_address == '':
         raise ValueError("Message is missing sender's address!")
-    out += _pstr16(obj.sender_address)
+    out += _pstr16(obj.return_address)
 
     # -----Command Arguments-----
     needs_args = (OBJ_MESSAGE, OBJ_SUBSCRIBER, OBJ_TRANSFORMER)
