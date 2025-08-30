@@ -149,8 +149,9 @@ class GlobalValues(object):
     address: str = ''
     port: int = -1
     verbosity: int = -1
-    print_tree: bool = None
+    print_tree: Optional[bool] = None
     transform_timeout: str = ''
+    consolidate: Optional[bool] = None
 
 
 class Globals(_MyceliaObj):
@@ -176,6 +177,8 @@ class Globals(_MyceliaObj):
             data['print_tree'] = payload.print_tree
         if payload.transform_timeout != '':
             data['transform_timeout'] = payload.transform_timeout
+        if type(payload.consolidate) is bool:
+            data['consolidate'] = payload.consolidate
 
         if not data:
             raise ValueError('No valid GlobalValues were added.')
