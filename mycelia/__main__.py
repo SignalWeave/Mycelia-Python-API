@@ -15,10 +15,12 @@ __all__ = [
     'Transformer',
     'Subscriber',
     'GlobalValues',
+    'Action',
     'Globals',
     'CMD_SEND',
     'CMD_ADD',
     'CMD_REMOVE',
+    'CMD_SIGTERM',
     'send',
     'get_local_ipv4',
     'MyceliaListener'
@@ -27,13 +29,15 @@ __all__ = [
 OBJ_MESSAGE = 1
 OBJ_TRANSFORMER = 2
 OBJ_SUBSCRIBER = 3
-OBJ_GLOBALS = 4
+OBJ_GLOBALS = 20
+OBJ_ACTION = 50
 
 _CMD_UNKNOWN = 0
 CMD_SEND = 1
 CMD_ADD = 2
 CMD_REMOVE = 3
-CMD_UPDATE = 4
+CMD_UPDATE = 20
+CMD_SIGTERM = 50
 
 _ENCODING = 'utf-8'
 API_PROTOCOL_VER = 1
@@ -201,6 +205,22 @@ class Globals(_MyceliaObj):
     @property
     def cmd_valid(self) -> bool:
         return self.cmd_type == CMD_UPDATE
+
+
+class Action(_MyceliaObj):
+    def __init__(self, return_address: str) -> None:
+        """
+        Args:
+            return_address (str): Address the broker should respond to with
+             updates.
+        """
+        super().__init__(OBJ_ACTION)
+        self.cmd_type = _CMD_UNKNOWN
+        self.return_address = return_address
+
+    @property
+    def cmd_valid(self) -> bool:
+        return self.cmd_type in (CMD_SIGTERM,)
 
 
 # --------Message Handling-----------------------------------------------------
