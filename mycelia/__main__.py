@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import json
 import socket
-import struct
 import threading
 import uuid
+from typing import Any
 from typing import Callable
 from typing import Optional
 from typing import Union
+
+from mycelia import _encode
+from mycelia import _decode
 
 
 __all__ = [
@@ -21,16 +24,26 @@ __all__ = [
     'CMD_ADD',
     'CMD_REMOVE',
     'CMD_SIGTERM',
-    'send',
+    'ACK_PLCY_NOREPLY',
+    'ACK_PLCY_ONSENT',
+    'ACK_SENT',
+    'ACK_TIMEOUT',
+    'send_and_get_ack',
     'get_local_ipv4',
     'MyceliaListener'
 ]
+
+API_PROTOCOL_VER = 1
+
+# -----Object Types-----
 
 OBJ_MESSAGE = 1
 OBJ_TRANSFORMER = 2
 OBJ_SUBSCRIBER = 3
 OBJ_GLOBALS = 20
 OBJ_ACTION = 50
+
+# -----Commands-----
 
 _CMD_UNKNOWN = 0
 CMD_SEND = 1
@@ -39,8 +52,20 @@ CMD_REMOVE = 3
 CMD_UPDATE = 20
 CMD_SIGTERM = 50
 
-_ENCODING = 'utf-8'
-API_PROTOCOL_VER = 1
+# -----Ack Policies-----
+
+ACK_PLCY_NOREPLY = 0
+ACK_PLCY_ONSENT = 1
+
+# -----Ack Values-----
+
+_ACK_UNKNOWN = 0
+ACK_SENT = 1
+"""Broker was able to and finished sending message to subscribers."""
+ACK_TIMEOUT = 10
+"""If no ack was gotten before the timeout time, a response with ACK_TIMEOUT
+is generated and returned instead.
+"""
 
 _PAYLOAD_TYPE = Union[str, bytes, bytearray, memoryview]
 
@@ -50,6 +75,12 @@ class MissingSecurityTokenError(Exception):
 
 
 # --------Command Types--------------------------------------------------------
+
+class MyceliaResponse(object):
+    def __init__(self, uid: str, ack: int) -> None:
+        self.uid = uid
+        self.ack = ack
+
 
 class _MyceliaObj(object):
     """A MyceliaObj is the type of functionality the user wishes to invoke in
@@ -65,12 +96,20 @@ class _MyceliaObj(object):
         self.protocol_version: int = API_PROTOCOL_VER
         self.obj_type: int = obj_type
         self.cmd_type: int = _CMD_UNKNOWN
-        self.return_address: str = ''
+        self.ack_policy: int = ACK_PLCY_NOREPLY
+        self.timeout: float = 0.1
         self.arg1: str = ''
         self.arg2: str = ''
         self.arg3: str = ''
         self.arg4: str = ''
         self.payload: _PAYLOAD_TYPE = ''
+
+        self.uid: str = str(uuid.uuid4())
+
+    def __setattr__(self, key: str, value: Any) -> None:
+        if key == 'uid' and hasattr(self, 'uid'):
+            raise AttributeError(f'{key} is immutable')
+        super().__setattr__(key, value)
 
     @property
     def cmd_valid(self) -> bool:
@@ -223,46 +262,7 @@ class Action(_MyceliaObj):
         return self.cmd_type in (CMD_SIGTERM,)
 
 
-# --------Message Handling-----------------------------------------------------
-
-def _u8(n: int) -> bytes:
-    """Pack unsigned 8-bit int."""
-    return struct.pack('>B', n & 0xFF)
-
-
-def _u16(n: int) -> bytes:
-    """Pack unsigned 16-bit int."""
-    return struct.pack('>H', n & 0xFFFF)
-
-
-def _u32(n: int) -> bytes:
-    """Pack unsigned 32-bit int as big-endian."""
-    return struct.pack('>I', n & 0xFFFFFFFF)
-
-
-def _pstr8(s: str) -> bytes:
-    """Length-prefixed string: [u8 len][bytes]."""
-    b = s.encode(_ENCODING)
-    return _u8(len(b)) + b
-
-
-def _pstr16(s: str) -> bytes:
-    """Length-prefixed string: [u16 len][bytes]."""
-    b = s.encode(_ENCODING)
-    return _u16(len(b)) + b
-
-
-def _pstr32(s: str) -> bytes:
-    """Length-prefixed string: [u32 len][bytes]."""
-    b = s.encode(_ENCODING)
-    return _u32(len(b)) + b
-
-
-def _pbytes16(b: bytes) -> bytes:
-    """Length-prefixed bytes: [u16 len][bytes]."""
-    bb = bytes(b)
-    return _u16(len(bb)) + bb
-
+# --------Encoding/Decoding----------------------------------------------------
 
 def _encode_mycelia_obj(obj: _MyceliaObj) -> bytes:
     if not obj.cmd_valid:
@@ -271,40 +271,86 @@ def _encode_mycelia_obj(obj: _MyceliaObj) -> bytes:
     out = bytearray()
 
     # -----Fixed Header-----
-    out += _u8(obj.protocol_version)
-    out += _u8(obj.obj_type)
-    out += _u8(obj.cmd_type)
+    out += _encode.write_u8(obj.protocol_version)
+    out += _encode.write_u8(obj.obj_type)
+    out += _encode.write_u8(obj.cmd_type)
+    out += _encode.write_u8(obj.ack_policy)
 
     # -----Tracking Sub-Header-----
-    out += _pstr8(str(uuid.uuid4()))
-    if obj.return_address == '':
-        raise ValueError("Message is missing sender's address!")
-    out += _pstr16(obj.return_address)
+    out += _encode.write_str8(obj.uid)
 
     # -----Command Arguments-----
     needs_args = (OBJ_MESSAGE, OBJ_SUBSCRIBER, OBJ_TRANSFORMER)
     if obj.obj_type in needs_args and obj.arg1 == '':
         raise ValueError(f'Message has incomplete args!')
-    out += _pstr8(obj.arg1)
-    out += _pstr8(obj.arg2)
-    out += _pstr8(obj.arg3)
-    out += _pstr8(obj.arg4)
+    out += _encode.write_str8(obj.arg1)
+    out += _encode.write_str8(obj.arg2)
+    out += _encode.write_str8(obj.arg3)
+    out += _encode.write_str8(obj.arg4)
 
     # -----Payload-----
-    out += _pbytes16(obj.payload.encode(_ENCODING))
+    out += _encode.write_bytes16(obj.payload.encode('utf-8'))
 
     packet_bytes = bytes(out)
-    packet = _u32(len(packet_bytes)) + packet_bytes
+    packet = _encode.write_u32(len(packet_bytes)) + packet_bytes
 
     return packet
 
 
-def send(message: _MyceliaObj, address: str, port: int) -> None:
+def _recv_and_decode(sock: socket.socket) -> MyceliaResponse:
+    """Read one message from a socket and decode it.
+
+    Frame (big-endian length):
+        u16 total_len   # includes the 2 length bytes
+        u8  uid_len
+        uid bytes
+        u8  ack
+
+    Args:
+        sock: Connected TCP socket (blocking or with a suitable timeout).
+    Returns:
+        DecodedMessage
+    Raises:
+        ConnectionError: If the socket closes prematurely.
+        ValueError: On malformed or incomplete frames.
+    """
+    hdr = _decode.recv_exact(sock, 2)
+    body_len = int.from_bytes(hdr, 'big')
+
+    body = _decode.recv_exact(sock, body_len)
+
+    if len(body) < 2:  # must at least fit uid_len + ack
+        raise ValueError('frame too short for uid_len + ack')
+    uid_len = body[0]
+
+    expected_total = 1 + uid_len + 1  # uid_len byte + uid + ack
+    if len(body) != expected_total:
+        raise ValueError(
+            f'uid_len {uid_len} incompatible with body_len {body_len}')
+    uid_bytes = body[1:1 + uid_len]
+    ack_value = body[1 + uid_len]
+
+    uid = uid_bytes.decode('utf-8')
+    return MyceliaResponse(uid=uid, ack=ack_value)
+
+
+def send_and_get_ack(
+        message: _MyceliaObj,
+        address: str,
+        port: int) -> MyceliaResponse:
     """Sends the CommandType message."""
     frame = _encode_mycelia_obj(message)
+
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.connect((address, port))
-        sock.sendall(frame)
+        try:
+            sock.settimeout(message.timeout)
+            sock.connect((address, port))
+            sock.sendall(frame)
+            response = _recv_and_decode(sock)
+
+            return response
+        except socket.timeout:
+            return MyceliaResponse(message.uid, ACK_TIMEOUT)
 
 
 # --------Network Boilerplate--------------------------------------------------
