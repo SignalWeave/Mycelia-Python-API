@@ -18,16 +18,28 @@ __all__ = [
     'Transformer',
     'Subscriber',
     'GlobalValues',
+    'Channel',
     'Action',
     'Globals',
+
     'CMD_SEND',
     'CMD_ADD',
     'CMD_REMOVE',
     'CMD_SIGTERM',
+
+    'SS_RANDOM',
+    'SS_ROUNDROBIN',
+    'SS_PUBSUB',
+
     'ACK_PLCY_NOREPLY',
     'ACK_PLCY_ONSENT',
+
     'ACK_SENT',
     'ACK_TIMEOUT',
+    'ACK_CHANNEL_NOT_FOUND',
+    'ACK_CHANNEL_ALREADY_EXISTS',
+    'ACK_ROUTE_NOT_FOUND',
+
     'send_and_get_ack',
     'get_local_ipv4',
     'MyceliaListener'
@@ -40,6 +52,7 @@ API_PROTOCOL_VER = 1
 OBJ_MESSAGE = 1
 OBJ_TRANSFORMER = 2
 OBJ_SUBSCRIBER = 3
+OBJ_CHANNEL = 4
 OBJ_GLOBALS = 20
 OBJ_ACTION = 50
 
@@ -51,6 +64,12 @@ CMD_ADD = 2
 CMD_REMOVE = 3
 CMD_UPDATE = 20
 CMD_SIGTERM = 50
+
+# -----Channel Selection Strategies-----
+
+SS_RANDOM = 0
+SS_ROUNDROBIN = 1
+SS_PUBSUB = 2
 
 # -----Ack Policies-----
 
@@ -66,6 +85,9 @@ ACK_TIMEOUT = 10
 """If no ack was gotten before the timeout time, a response with ACK_TIMEOUT
 is generated and returned instead.
 """
+ACK_CHANNEL_NOT_FOUND = 20
+ACK_CHANNEL_ALREADY_EXISTS = 21
+ACK_ROUTE_NOT_FOUND = 30
 
 _PAYLOAD_TYPE = Union[str, bytes, bytearray, memoryview]
 
@@ -118,20 +140,16 @@ class _MyceliaObj(object):
 
 class Message(_MyceliaObj):
     def __init__(self,
-                 return_address: str,
                  route: str,
                  payload: _PAYLOAD_TYPE) -> None:
         """
         Args:
-            return_address (str): Address the broker should respond to with
-             updates.
             route (str): Which route the Message will travel through.
             payload (Union[str, bytes, bytearray, memoryview]): The data to
              send to the broker.
         """
         super().__init__(OBJ_MESSAGE)
         self.cmd_type = CMD_SEND
-        self.return_address = return_address
         self.arg1 = route
         self.payload = payload
 
@@ -142,21 +160,17 @@ class Message(_MyceliaObj):
 
 class Transformer(_MyceliaObj):
     def __init__(self,
-                 return_address: str,
                  route: str,
                  channel: str,
                  address: str) -> None:
         """
         Args:
-            return_address (str): Address the broker should respond to with
-             updates.
             route (str): Which route the Message will travel through.
             channel (str): which channel to add the transformer to.
             address (str): Where the channel should forward the data to.
         """
         super().__init__(OBJ_TRANSFORMER)
         self.cmd_type = CMD_ADD
-        self.return_address = return_address
         self.arg1 = route
         self.arg2 = channel
         self.arg3 = address
@@ -168,21 +182,17 @@ class Transformer(_MyceliaObj):
 
 class Subscriber(_MyceliaObj):
     def __init__(self,
-                 return_address: str,
                  route: str,
                  channel: str,
                  address: str) -> None:
         """
         Args:
-            return_address (str): Address the broker should respond to with
-             updates.
             route (str): Which route the Message will travel through.
             channel (str): which channel to add the subscriber to.
             address (str): Where the channel should forward the data to.
         """
         super().__init__(OBJ_SUBSCRIBER)
         self.cmd_type = CMD_ADD
-        self.return_address = return_address
         self.arg1 = route
         self.arg2 = channel
         self.arg3 = address
@@ -206,17 +216,14 @@ class GlobalValues(object):
 
 
 class Globals(_MyceliaObj):
-    def __init__(self, return_address: str, payload: GlobalValues) -> None:
+    def __init__(self, payload: GlobalValues) -> None:
         """
         Args:
-            return_address (str): Address the broker should respond to with
-             updates.
             payload (GlobalValues): The struct object mycelia.GlobalValues that
              contains the updated values.
         """
         super().__init__(OBJ_GLOBALS)
         self.cmd_type = CMD_UPDATE
-        self.return_address = return_address
 
         data = {}
         if payload.address != '':
@@ -246,16 +253,23 @@ class Globals(_MyceliaObj):
         return self.cmd_type == CMD_UPDATE
 
 
+class Channel(_MyceliaObj):
+    def __init__(self, route: str, name: str, strat: int = SS_PUBSUB) -> None:
+        super().__init__(OBJ_CHANNEL)
+        self.cmd_type = CMD_ADD
+        self.arg1 = route
+        self.arg2 = name
+        self.arg3 = str(strat)
+
+    @property
+    def cmd_valid(self) -> bool:
+        return self.cmd_type in (CMD_ADD, CMD_REMOVE)
+
+
 class Action(_MyceliaObj):
-    def __init__(self, return_address: str) -> None:
-        """
-        Args:
-            return_address (str): Address the broker should respond to with
-             updates.
-        """
+    def __init__(self) -> None:
         super().__init__(OBJ_ACTION)
         self.cmd_type = _CMD_UNKNOWN
-        self.return_address = return_address
 
     @property
     def cmd_valid(self) -> bool:
@@ -335,22 +349,35 @@ def _recv_and_decode(sock: socket.socket) -> MyceliaResponse:
 
 
 def send_and_get_ack(
+        sock: socket.socket,
         message: _MyceliaObj,
         address: str,
-        port: int) -> MyceliaResponse:
-    """Sends the CommandType message."""
+        port: int) -> Optional[MyceliaResponse]:
+    """Sends the object message.
+
+    Args:
+        sock (socket.socket): The socket the message should be sent over. The
+         response will be returned over the same socket.
+        message (_MyceliaObj): The object message to send.
+        address (str): The broker server address.
+        port (int): The broker server port.
+    """
     frame = _encode_mycelia_obj(message)
 
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        try:
+    try:
+        if message.ack_policy != ACK_PLCY_NOREPLY:
             sock.settimeout(message.timeout)
-            sock.connect((address, port))
-            sock.sendall(frame)
+
+        sock.connect((address, port))
+        sock.sendall(frame)
+
+        response = None
+        if message.ack_policy != ACK_PLCY_NOREPLY:
             response = _recv_and_decode(sock)
 
-            return response
-        except socket.timeout:
-            return MyceliaResponse(message.uid, ACK_TIMEOUT)
+        return response
+    except socket.timeout:
+        return MyceliaResponse(message.uid, ACK_TIMEOUT)
 
 
 # --------Network Boilerplate--------------------------------------------------
