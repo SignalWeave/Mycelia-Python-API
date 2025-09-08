@@ -5,7 +5,6 @@ All encoding helper functions for sending a message.
 """
 
 
-import socket
 import struct
 
 
